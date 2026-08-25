@@ -305,16 +305,19 @@ These are properties of the YAML write API that silently produce wrong results w
 - **`branchId` must be a server-issued UUID.** Passing a branch name returns `400 Unrecognized key: "branchName"`.
 - **Topic file names normalize to the repository root**, and the topic name is the filename stem rather than the view-scoped name. Pass that stem as both `topicName` and `join_paths_from_topic_name`.
 - **Know which layer you are reading.** `yaml-get` returns the extension layer by default — the authored deltas only. `--mode combined` returns the composed result, schema base included.
-- **Never write with `mode: merged`.** Write modes differ in what the posted YAML is deduplicated against, and this is the source of authored-layer bloat. Posting one 646-byte view body — a combined read differing from the schema base by a single label — produced these authored layers:
+- **Never write with `mode: merged`.** All four write modes produce the same resolved model; they differ in how much the branch stores to get there. Posting one 646-byte view body — a combined read differing from the schema base by a single label — gives:
 
-  | Write mode | Authored layer |
-  |---|---|
-  | `combined` (default) | 83 bytes — the label only |
-  | `extension` | 83 bytes |
-  | `staged` | 83 bytes |
-  | `merged` | **646 bytes — every schema base dimension materialized** |
+  | Write mode | Read back in combined | Read back in extension |
+  |---|---|---|
+  | `combined` (default) | 646 bytes | 83 bytes |
+  | `extension` | 646 bytes | 83 bytes |
+  | `staged` | 646 bytes | 83 bytes |
+  | `merged` | 646 bytes | **646 bytes** |
 
-  The reason is the pruning pass. A save in `extension` or `staged` is followed by an automatic re-save in combined mode that strips properties already supplied by the schema layer; `combined` needs no such pass because it prunes on the way in. `merged` is excluded from it, so whatever was posted persists as authored content. The default is correct; select a mode deliberately or not at all.
+  The combined read is the composed result and is identical in every case. The extension read is what the branch actually stores. Under `merged` that is a full copy of the schema base which resolves to exactly what the schema layer already supplied: redundant content, invisible in behaviour, accumulating in the model.
+
+  The cause is the pruning pass. A save in `extension` or `staged` is followed by an automatic re-save in combined mode that strips properties the schema layer already provides, and `combined` prunes on the way in. `merged` is excluded from it. The default is correct; select a mode deliberately or not at all.
+
 - **Assert the authored layer after every write.** Read back with `--mode extension` and confirm it contains only the intended delta and not a materialized copy of the schema base. Dedup depends on the base being resolvable, so a write against a view whose base does not resolve — an offloaded or inactive schema, a table no longer present — persists the whole posted body as authored content. Model bloat accrues silently this way and is expensive to unwind later.
 
 ## 12. Manifest, idempotency, and rollback
