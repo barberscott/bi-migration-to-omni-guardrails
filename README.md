@@ -46,10 +46,10 @@ The in-scope source content is frozen for the same window. Parity (§14) compare
 Name these roles before work begins:
 
 - **Parity sign-off** per migrated dashboard — the business owner of the source content (§14).
-- **Workbook-model exceptions** — a single approver, or one per domain (§6).
+- **Workbook-model exceptions** — a single approver, or one per domain (§7).
 - **Connection schema-scope changes** — a data-team approver (§2).
 - **Content inventory and triage** — the owner of the in-scope decision (§2).
-- **Access gating** — the source content owner who confirms user-attribute mappings (§7.3).
+- **Access gating** — the source content owner who confirms user-attribute mappings (§8.3).
 
 ### 1.4 Agreed scope and tolerances
 
@@ -153,14 +153,20 @@ The following are prerequisites owned by the customer's data team. Migration too
 
 - **Treat names as permanent.** Content breaks on rename. Labels are cosmetic; names are not. Check net-new names for collisions, including collisions that appear only after view-name scoping.
 
-## 5. Content
+## 5. dbt
+
+- If dbt is integrated, everything must be built off virtual schemas.
+
+---
+
+## 6. Content
 
 - **All queries must be based on topics**, including single-view topics.
 - **Dashboard filters must bind to modeled fields**, with default values and control types matching the source.
 - **Window-shaped result columns are table calculations, not model fields.** Running totals, moving averages, period-over-period and month-over-month percentages, percent-of-total, and rank are computed per query. Modeling them as fields is incorrect.
-- **Migrated content must be placed deliberately.** Folder, owner, and permissions are assigned as part of the migration (§7).
+- **Migrated content must be placed deliberately.** Folder, owner, and permissions are assigned as part of the migration (§8).
 
-## 6. Workbook model and ad hoc content
+## 7. Workbook model and ad hoc content
 
 Anything placed in the workbook model must be negotiated by exception. Nothing goes there by default.
 
@@ -171,17 +177,17 @@ Forbidden absent an approved exception:
 - Raw-SQL tiles
 - Any SQL-authored field at the workbook layer
 
-**Table calculations are permitted** and are outside this rule. They live in the query rather than the workbook model, and per §5 they are the correct mechanism for presentation-layer computation. Using a table calculation to reimplement a metric that belongs in the model is not permitted.
+**Table calculations are permitted** and are outside this rule. They live in the query rather than the workbook model, and per §6 they are the correct mechanism for presentation-layer computation. Using a table calculation to reimplement a metric that belongs in the model is not permitted.
 
 **This must be enforced by a check.** Content that does not fit the shared model still renders from the workbook model, so drift there is invisible in review. A document's identifier is also its workbook model identifier: read each migrated document's workbook model and assert it is empty as a pipeline step.
 
 **Exceptions require a named approver**, the reason recorded in the migration manifest (§11), and a tracked follow-up to model it properly.
 
-## 7. Access and row-level controls
+## 8. Access and row-level controls
 
 Row-level security in Omni is topic-only. A net-new topic has nothing to inherit: it starts as an unfiltered surface, and the migration must reconstruct the gating.
 
-### 7.1 Discovery
+### 8.1 Discovery
 
 Identifying which source content is gated or pre-filtered by user attributes in the incumbent system is a discovery deliverable produced before any topic is authored.
 
@@ -189,7 +195,7 @@ For each in-scope source object, discovery must produce: whether it is user-attr
 
 This work belongs to the migrating party and to the export side of their tooling, since it depends on source-system expertise. There is no established practice for it among migration vendors today, so it should be scoped explicitly rather than assumed.
 
-### 7.2 Routing
+### 8.2 Routing
 
 Each discovered gate routes to one of:
 
@@ -198,7 +204,7 @@ Each discovered gate routes to one of:
 
 Record the routing decision per source object in the manifest (§11), with the source expression alongside the Omni expression.
 
-### 7.3 Required validations
+### 8.3 Required validations
 
 **1. The attribute is the correct one.** The chosen Omni user attribute must be the semantic counterpart of the source gate. This is an intent question and requires the source content owner to confirm it.
 
@@ -227,17 +233,11 @@ Cover at least one user per distinct attribute value plus one user with no value
 
 Automated checks that omit `userId` do not exercise this. Running under the API key's own identity returned zero rows and a `COMPLETE` status where a real user with the same missing attribute got a hard failure. Access-filter tests must name a real `userId`.
 
-### 7.4 Other access requirements
+### 8.4 Other access requirements
 
 - **Migrated content must not broaden access.** Where source and target access models do not map cleanly, escalate (§12).
 - **Content permissions are assigned, not inherited.** Migration carries no access. Folder placement, ownership, and permits are deliverables.
 - **Tooling must not modify connection permissions.** Schema scope changes are a §2 precondition.
-
-## 8. dbt
-
-- If dbt is integrated, everything must be built off virtual schemas.
-
----
 
 # Part III — Development hygiene
 
@@ -369,7 +369,7 @@ Omni provides no dry-run and no server-side gate. A branch carrying blocking val
 
 ## 14. Parity
 
-Structural rules do not establish that the numbers are correct. Parity is a separate gate. The access-filter validations in §7.3 are acceptance criteria alongside these.
+Structural rules do not establish that the numbers are correct. Parity is a separate gate. The access-filter validations in §8.3 are acceptance criteria alongside these.
 
 - **Numeric parity is an acceptance criterion.** Compare every migrated tile against the source tool's output within a stated tolerance, and commit the comparison artifact with the pull request.
 - **The business owner of the source content signs off on parity**, not the migrating party.
