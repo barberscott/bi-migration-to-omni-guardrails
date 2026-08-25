@@ -153,7 +153,13 @@ The following are prerequisites owned by the customer's data team. Migration too
 - **Where the field genuinely belongs on the shared view, adding it is permitted** with the model owner's approval, since pre-existing topics inherit it. Tag it with the same migration tag used for topics (§3) so migration-added fields remain identifiable after the merge.
 - **Changes to existing fields** — label, `hidden`, format, or `sql` — alter something already in use by content the migration does not own. These require explicit approval from the model owner and are not in the migration's default scope.
 
-### 4.7 Naming
+### 4.7 Descriptions
+
+- **Port descriptions from the source model.** Where the incumbent tool carries descriptions on its model objects — Looker's `description` on views, dimensions, measures, and explores, for example — migrate them to the Omni equivalent. This metadata is costly to recreate and is silently lost if the migration ignores it. The rule covers topics as well as views and fields.
+- **Never overwrite a description that already exists.** Where the Omni object already carries one, leave it. It reflects a decision made in Omni that the migrating party cannot evaluate, and the source description is not necessarily the more current of the two.
+- This is distinct from the prohibition in §3 on using `description` for provenance. Porting a description written by the source model's author carries existing metadata forward; authoring one means the migrating party characterizing an object it does not understand.
+
+### 4.8 Naming
 
 - **Treat names as permanent.** Content breaks on rename. Labels are cosmetic; names are not. Check net-new names for collisions, including collisions that appear only after view-name scoping.
 
