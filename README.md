@@ -85,6 +85,35 @@ The following are prerequisites owned by the customer's data team. Migration too
 - **Cross-view fields belong in the topic's `views:` block, not in a view file.** A dimension or measure whose `sql` references `${other_view.field}` depends on that view being joined, which is not guaranteed in every topic containing the host view. Defining it in the view file produces validator errors in every topic that includes the host view without the referenced view, cascading across topics that are otherwise correct. Define it in the topic, where the join context is explicit. Only put a cross-view field in a view file when the referenced view is joined in every topic that includes the host view.
 - **Check the global relationships file before authoring a topic-scoped relationship.** If a join between the same two views already exists in either direction with the same `on_sql`, the topic-scoped copy is redundant — use `joins` alone. If the `on_sql` differs, use the extended-views pattern rather than silently overriding the global join.
 - **Join the same view multiple ways with the extended-views pattern**, not `join_to_view_as`. The error `relationship alias duplicates view name` indicates the wrong pattern was used.
+
+  The pattern creates a named alias view that `extends` the original, relabels its fields for the role it plays, and joins on its own condition. Where `order_items` needs `users` as both buyer and seller:
+
+  ```yaml
+  # sellers.view — the alias
+  extends: [users]
+  description: The selling party on a transaction.
+  dimensions:
+    name:
+      label: Seller Name
+  ```
+
+  ```yaml
+  # relationships file — the alias gets its own join condition
+  - join_from_view: order_items
+    join_to_view: sellers
+    on_sql: ${order_items.seller_id} = ${sellers.id}
+    relationship_type: many_to_one
+    join_type: always_left
+  ```
+
+  ```yaml
+  # the topic — both roles joined independently
+  joins:
+    sellers: {}
+    users: {}
+  ```
+
+  Define the alias as a standalone `.view` file with a global relationship where other topics will need the same role. Where the alias is specific to one topic, define it inline in that topic's `views:` block with its relationship in the same file.
 - **Before adding a topic-scoped field to an existing view, confirm the field does not already exist.** A field of the same name with different SQL is an override: queries through that topic use the topic-scoped definition while every other topic keeps the shared one. Overrides require explicit approval.
 
 ## 4. Views, dimensions, and measures
