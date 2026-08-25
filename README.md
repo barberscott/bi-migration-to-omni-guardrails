@@ -116,6 +116,7 @@ Findings the migration must produce before topics are authored or content is bui
 
 ### 4.3 Query views
 
+- **Never delete or modify an existing query view.** The reasoning is the same as for database views: it may be in use by content the migration does not own. Where the migration needs a query view that does not exist, author a new one.
 - **Query views must either be modeled on a topic** (using the `query` parameters) **or reference all database tables, dimensions, and measures as `${database_view__table}` and fields as `${foo_bar__qux.zip}`.** No direct-table or direct-field references. In a query view's `sql:` block this means `${view_name}` rather than a hard-coded `CATALOG.SCHEMA.TABLE` path. This preserves the path to dbt virtual schemas and keeps the definition correct if the table moves.
 
 ### 4.4 Field and column references
