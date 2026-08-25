@@ -25,17 +25,43 @@ The following are prerequisites owned by the customer's data team. Migration too
 - **Connection schema scope.** If a required database view is not in scope for the connection, the connection must be edited to bring its schema into scope. Widening scope exposes every table in that schema to every modeler on that connection, so this requires data-team approval.
 - **AI quarantine configuration.** Configure the model-level `ai_chat_topics` property once, before the migration begins (§8). Migration tooling must not write this property.
 - **Content inventory and triage.** A named owner determines what is in scope. Without an explicit in-scope list, dead and duplicated source content is reproduced along with everything else.
-- **Target model.** Decide which model receives the migration's output (§2).
+- **Target model.** Decide which model receives the migration's output (§4).
 
 ---
 
-## 2. Branch and model state
+## 2. Topics
 
-- **The model must return to the state it was in when the branch was opened.** No net-new errors. §3 defines how this is measured.
+- **Net-new topics must be identifiable as migration output.** This allows migration-driven work to be separated from pre-existing work after the merge. Carry provenance as metadata — a tag, plus topic-level `owners:` naming an accountable person. Do not use `description` or `ai_context` for this; the migrating party cannot characterize a topic's intended use, and an inaccurate characterization is worse than none.
+- **Notes on how the migrated content uses a topic belong in the topic as comments.** These record what the migration did, which the migrating party does know.
+- **Existing topics must not be modified.**
+- **Topics must not duplicate existing topics.** If an existing topic can serve the query, use it.
+- **Consolidate net-new topics by base view, not by query.** One topic per base view, covering the union of join paths the migrated queries require. A topic's join graph costs only what a query references, so unused joins in a consolidated topic add no query-time cost.
+  - *Exception:* a join-path or grain conflict — two different paths to the same view, or the same view needed at two grains — forces a split.
+  - *Accepted cost:* a wider field list and greater fan-out exposure. See §3 and §8.
+
+---
+
+## 3. Views, dimensions, and measures
+
+- **Every view used in a migration-generated topic must have a declared primary key**, whether database view or query view.
+- **Database views must not be provisioned in the shared model.** Resolve a missing view by bringing its schema into connection scope (§1).
+- **Establish that a view is missing before acting on it.** A model-wide `yaml-get` returns only views from currently-loaded schemas; views in offloaded or inactive schemas are absent from the response while remaining available. Run `omni models get-schemas` and, if the schema is listed, load it with `--includeschemas <SCHEMA>` (one schema per call) before concluding a view does not exist. The remedy for a genuinely missing view is a connection-scope change, so a false negative here widens data access unnecessarily.
+- **Query views must either be modeled** (using the `query` parameters) **or reference all database tables, dimensions, and measures as `${database_view__table}` and fields as `${foo_bar__qux.zip}`.** No direct-table or direct-field references. This preserves the path to dbt virtual schemas.
+- **No direct column references in migration-authored code.** All column references use `${foo_bar__qux.zip}` notation.
+- **No net-new fields on existing views.** No relabeling, no `hidden` changes, no format changes on existing fields. Migration-authored calculations go in a migration-owned extension view or query view.
+- **Use a measure `filters:` block rather than `CASE WHEN` for filtered aggregates.** Keep `sql` limited to the value being aggregated.
+- **Validate fan-out and symmetric aggregation explicitly.** A declared primary key is necessary but not sufficient. Any measure reachable across a one-to-many join in a consolidated topic requires explicit validation. The consolidation rule in §2 increases exposure to this.
+- **Treat names as permanent.** Content breaks on rename. Labels are cosmetic; names are not. Check net-new names for collisions, including collisions that appear only after view-name scoping.
+
+---
+
+## 4. Branch and model state
+
+- **The model must return to the state it was in when the branch was opened.** No net-new errors. §5 defines how this is measured.
 
 - **Every file the migration writes must be a file the migration owns.** The pull request reports the files it touched, and none may be a pre-existing model file. Global model settings — `alwaysScopeViewNames`, model-level defaults, connection bindings, `ai_chat_topics` — are out of bounds.
 
-  This is stated as an invariant rather than a pre-declared allowlist because the file set is discovered during the work. It restates the prohibitions in §4 and §5 as a single checkable assertion, and it supplies the definition of "my files" that the `yaml_path` gate in §3.2 depends on.
+  This is stated as an invariant rather than a pre-declared allowlist because the file set is discovered during the work. It restates the prohibitions in §2 and §3 as a single checkable assertion, and it supplies the definition of "my files" that the `yaml_path` gate in §5.2 depends on.
 
 - **Model YAML must not be hand-committed to the git repository.** All writes go through Omni so that normalization happens on write. Hand-edited YAML produces corrective commits and unreviewable diffs.
 
@@ -48,16 +74,16 @@ The following are prerequisites owned by the customer's data team. Migration too
 
 ---
 
-## 3. Validation gates
+## 5. Validation gates
 
-### 3.1 Severity
+### 5.1 Severity
 
 Model validation returns a JSON array of issue objects carrying `is_warning`, `message`, and `yaml_path`. Only `is_warning: false` is an error.
 
 - Errors are blocking.
 - Warnings are a reported delta requiring a written waiver. They are not automatically blocking. Warnings such as `No join path from …` are common on production models, so a rule of "no net-new errors or warnings" is stricter than Omni's own bar and will either block every pull request or be ignored.
 
-### 3.2 Gate on `yaml_path`
+### 5.2 Gate on `yaml_path`
 
 No pre-branch snapshot is needed. Both validators accept an optional branch, and main can be queried at any time:
 
@@ -70,9 +96,9 @@ omni models content-validator-get <modelId> --branch-id <branchId>   # branch
 
 The two commands use different flag spellings (`--branchid` and `--branch-id`). Pin both in the tooling spec.
 
-Filter issues by `yaml_path` against the files the migration owns (§2) rather than diffing branch against main. This is unaffected by main moving under a long-running branch, and it prevents new breakage being attributed to pre-existing noise.
+Filter issues by `yaml_path` against the files the migration owns (§4) rather than diffing branch against main. This is unaffected by main moving under a long-running branch, and it prevents new breakage being attributed to pre-existing noise.
 
-### 3.3 Topic exposure gate
+### 5.3 Topic exposure gate
 
 A topic-scoped `relationships` entry written without the corresponding view `joins` entry validates clean, but the joined view's fields are not exposed and queries against them return empty. Model validation does not detect this.
 
@@ -86,7 +112,7 @@ The response must contain every field the migrated content references.
 
 Ordering constraint: a topic marked `hidden: true` returns 404 from this endpoint while still validating clean. Run this gate before applying the quarantine flag in §8.
 
-### 3.4 Content validator behavior
+### 5.4 Content validator behavior
 
 The content validator reports broken references in saved content. It does not evaluate whether results are correct.
 
@@ -97,45 +123,19 @@ The content validator reports broken references in saved content. It does not ev
 - Drafts are returned alongside published documents with `type: "draft"`. Migration output held in drafts is therefore in scope. Only documents cleared to zero query presentations are omitted.
 - Consume the API response rather than the user interface. The validator's search filters on field, view, and topic references parsed from query definitions and does not read issue text. Breakage originating in the model, such as a broken `always_where` on a topic, attaches an error to every tile while the document contains no matching reference, so those rows cannot be reached through the interface filter. The errors are present in the API response.
 
-### 3.5 Sequencing
+### 5.5 Sequencing
 
 Verify written YAML with a read-back before interpreting any validator output. A successful write response means the write was accepted, not that it landed in the intended file. Validator results against a branch whose contents differ from expectation are not meaningful.
 
-### 3.6 No enforcement at merge
+### 5.6 No enforcement at merge
 
 Omni provides no dry-run and no server-side gate. A branch carrying blocking validation errors can be merged. Every gate in this section is procedural and depends on the review process.
 
 ---
 
-## 4. Topics
-
-- **Net-new topics must be identifiable as migration output.** This allows migration-driven work to be separated from pre-existing work after the merge. Carry provenance as metadata — a tag, plus topic-level `owners:` naming an accountable person. Do not use `description` or `ai_context` for this; the migrating party cannot characterize a topic's intended use, and an inaccurate characterization is worse than none.
-- **Notes on how the migrated content uses a topic belong in the topic as comments.** These record what the migration did, which the migrating party does know.
-- **Existing topics must not be modified.**
-- **Topics must not duplicate existing topics.** If an existing topic can serve the query, use it.
-- **Consolidate net-new topics by base view, not by query.** One topic per base view, covering the union of join paths the migrated queries require. A topic's join graph costs only what a query references, so unused joins in a consolidated topic add no query-time cost.
-  - *Exception:* a join-path or grain conflict — two different paths to the same view, or the same view needed at two grains — forces a split.
-  - *Accepted cost:* a wider field list and greater fan-out exposure. See §5 and §8.
-
----
-
-## 5. Views, dimensions, and measures
-
-- **Every view used in a migration-generated topic must have a declared primary key**, whether database view or query view.
-- **Database views must not be provisioned in the shared model.** Resolve a missing view by bringing its schema into connection scope (§1).
-- **Establish that a view is missing before acting on it.** A model-wide `yaml-get` returns only views from currently-loaded schemas; views in offloaded or inactive schemas are absent from the response while remaining available. Run `omni models get-schemas` and, if the schema is listed, load it with `--includeschemas <SCHEMA>` (one schema per call) before concluding a view does not exist. The remedy for a genuinely missing view is a connection-scope change, so a false negative here widens data access unnecessarily.
-- **Query views must either be modeled** (using the `query` parameters) **or reference all database tables, dimensions, and measures as `${database_view__table}` and fields as `${foo_bar__qux.zip}`.** No direct-table or direct-field references. This preserves the path to dbt virtual schemas.
-- **No direct column references in migration-authored code.** All column references use `${foo_bar__qux.zip}` notation.
-- **No net-new fields on existing views.** No relabeling, no `hidden` changes, no format changes on existing fields. Migration-authored calculations go in a migration-owned extension view or query view.
-- **Use a measure `filters:` block rather than `CASE WHEN` for filtered aggregates.** Keep `sql` limited to the value being aggregated.
-- **Validate fan-out and symmetric aggregation explicitly.** A declared primary key is necessary but not sufficient. Any measure reachable across a one-to-many join in a consolidated topic requires explicit validation. The consolidation rule in §4 increases exposure to this.
-- **Treat names as permanent.** Content breaks on rename. Labels are cosmetic; names are not. Check net-new names for collisions, including collisions that appear only after view-name scoping.
-
----
-
 ## 6. Content
 
-- **No content-validator errors in newly generated content, and no net-new content-validator errors in pre-existing content.** Measured per §3.4.
+- **No content-validator errors in newly generated content, and no net-new content-validator errors in pre-existing content.** Measured per §5.4.
 - **All queries must be based on topics**, including single-view topics.
 - **Dashboard filters must bind to modeled fields**, with default values and control types matching the source.
 - **Migrated content must be placed deliberately.** Folder, owner, and permissions are assigned as part of the migration (§9).
@@ -176,14 +176,14 @@ Net-new topics are quarantined from AI and from the topic picker until reviewed 
 
 - With no `ai_chat_topics` property present, all topics are available to AI chat. Taking no action means the migration's topics are live in AI on merge day, so the quarantine must be an affirmative step.
 - Negation by tag keeps the approval action inside the migration-owned topic file. An explicit allow-list would require editing the model file on every approval, which adds churn and creates opportunities to break AI for pre-existing topics.
-- The tag also serves as the provenance marker required by §4: greppable, machine-readable, and carrying no semantic claim about the topic.
+- The tag also serves as the provenance marker required by §2: greppable, machine-readable, and carrying no semantic claim about the topic.
 
 **Constraints**
 
 - **Tooling must not write `ai_chat_topics`.** An empty list disables AI chat for the whole model. Configuration is a one-time human prerequisite (§1).
 - If the model already carries an explicit `ai_chat_topics` list, append the negation rather than replacing the list.
 - **Hiding a topic does not break content built on it.** `hidden: true` removes the topic from the workbook picker; saved content continues to query it.
-- **Apply `hidden` last.** A topic carrying `hidden: true` returns 404 from `get-topic` while still validating clean, so the §3.3 exposure gate cannot inspect it. Run the exposure check first.
+- **Apply `hidden` last.** A topic carrying `hidden: true` returns 404 from `get-topic` while still validating clean, so the §5.3 exposure gate cannot inspect it. Run the exposure check first.
 - **This is not a security control.** It governs AI chat and discoverability only. Access control is §9.
 - **Consolidated topics are wide.** AI field curation becomes necessary as a topic approaches roughly 550 fields, so `ai_fields` curation belongs in the approval review.
 
@@ -299,8 +299,8 @@ An alternative to writing migration output into the shared model: give the migra
 
 **Advantages**
 
-- The provenance requirement in §4 becomes structural rather than a tagging convention.
-- The ownership invariant in §2 holds by construction, since the migration is not writing to the shared model at all.
+- The provenance requirement in §2 becomes structural rather than a tagging convention.
+- The ownership invariant in §4 holds by construction, since the migration is not writing to the shared model at all.
 - The migration is separable and revertible as a unit.
 - Content that does not belong in the shared model has an obvious home, which reduces pressure toward the workbook model.
 
