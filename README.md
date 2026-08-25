@@ -89,18 +89,38 @@ The following are prerequisites owned by the customer's data team. Migration too
 
 ## 4. Views, dimensions, and measures
 
+### 4.1 Primary keys and aggregation correctness
+
 - **Every view used in a migration-generated topic must have a declared primary key**, whether database view or query view. Omni keeps `sum`, `count`, and `avg` correct under one-to-many joins by deduplicating on the primary key; a view without one cannot be made symmetric, and a row-count measure on it inflates whenever a join duplicates its rows.
   - A single unique column is declared with `primary_key: true` on that dimension.
   - Where no single column is unique, use the built-in compound key: `custom_compound_primary_key_sql: [field_a, field_b]` at the view level, with no `primary_key: true` dimension. Do not hand-build a concatenated key expression. The same parameter accepts a single column where that is more convenient.
   - Where no combination of columns is row-unique, do not declare a key at all. Fix the grain or do not join the view. A declared key that is not actually unique is worse than none.
+- **Validate fan-out and symmetric aggregation explicitly.** A declared primary key is necessary but not sufficient. Any measure reachable across a one-to-many join in a consolidated topic requires explicit validation. The consolidation rule in §3 increases exposure to this. A measure exceeding a measure it should be a subset of is the signature of fan-out from a non-distinct count on a view with a weak key.
+
+### 4.2 View provisioning and discovery
+
 - **Database views must not be provisioned in the shared model.** Resolve a missing view by bringing its schema into connection scope (§2).
 - **Establish that a view is missing before acting on it.** A model-wide `yaml-get` returns only views from currently-loaded schemas; views in offloaded or inactive schemas are absent from the response while remaining available. Run `omni models get-schemas` and, if the schema is listed, load it with `--includeschemas <SCHEMA>` (one schema per call) before concluding a view does not exist. The remedy for a genuinely missing view is a connection-scope change, so a false negative here widens data access unnecessarily.
+
+### 4.3 Query views
+
 - **Query views must either be modeled** (using the `query` parameters) **or reference all database tables, dimensions, and measures as `${database_view__table}` and fields as `${foo_bar__qux.zip}`.** No direct-table or direct-field references. In a query view's `sql:` block this means `${view_name}` rather than a hard-coded `CATALOG.SCHEMA.TABLE` path. This preserves the path to dbt virtual schemas and keeps the definition correct if the table moves.
+
+### 4.4 Field and column references
+
 - **No direct column references in migration-authored code.** All column references use `${foo_bar__qux.zip}` notation. There is no `${TABLE}` construct; `${TABLE}.column` fails at validation and query time with `Column "__omni_scoped" not found`. A raw column auto-maps by name and needs no `sql:` at all.
-- **No net-new fields on existing views.** No relabeling, no `hidden` changes, no format changes on existing fields. Migration-authored calculations go in a migration-owned extension view or query view.
-- **Use a measure `filters:` block rather than `CASE WHEN` for filtered aggregates.** Keep `sql` limited to the value being aggregated. In filter blocks, use the bare field name for fields on the measure's own view and fully qualify fields from a joined view. Booleans use the same `{ is: … }` operator form as every other field, not a bare scalar.
 - **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions.
-- **Validate fan-out and symmetric aggregation explicitly.** A declared primary key is necessary but not sufficient. Any measure reachable across a one-to-many join in a consolidated topic requires explicit validation. The consolidation rule in §3 increases exposure to this. A measure exceeding a measure it should be a subset of is the signature of fan-out from a non-distinct count on a view with a weak key.
+
+### 4.5 Measures
+
+- **Use a measure `filters:` block rather than `CASE WHEN` for filtered aggregates.** Keep `sql` limited to the value being aggregated. In filter blocks, use the bare field name for fields on the measure's own view and fully qualify fields from a joined view. Booleans use the same `{ is: … }` operator form as every other field, not a bare scalar.
+
+### 4.6 Changes to existing views
+
+- **No net-new fields on existing views.** No relabeling, no `hidden` changes, no format changes on existing fields. Migration-authored calculations go in a migration-owned extension view or query view.
+
+### 4.7 Naming
+
 - **Treat names as permanent.** Content breaks on rename. Labels are cosmetic; names are not. Check net-new names for collisions, including collisions that appear only after view-name scoping.
 
 ## 5. Content
