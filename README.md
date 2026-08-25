@@ -72,7 +72,53 @@ The following are prerequisites owned by the customer's data team. Migration too
 
 # Part II — Modeling and content standards
 
-## 3. Topics
+## 3. Views, dimensions, and measures
+
+### 3.1 Primary keys and aggregation correctness
+
+- **Every view used in a migration-generated topic must have a declared primary key**, whether database view or query view. Omni keeps `sum`, `count`, and `avg` correct under one-to-many joins by deduplicating on the primary key; a view without one cannot be made symmetric, and a row-count measure on it inflates whenever a join duplicates its rows.
+  - A single unique column is declared with `primary_key: true` on that dimension.
+  - Where no single column is unique, use the built-in compound key: `custom_compound_primary_key_sql: [field_a, field_b]` at the view level, with no `primary_key: true` dimension. Do not hand-build a concatenated key expression. The same parameter accepts a single column where that is more convenient.
+  - Where no combination of columns is row-unique, do not declare a key at all. Fix the grain or do not join the view. A declared key that is not actually unique is worse than none.
+- **Validate fan-out and symmetric aggregation explicitly.** A declared primary key is necessary but not sufficient. Any measure reachable across a one-to-many join in a consolidated topic requires explicit validation. The consolidation rule in §4 increases exposure to this. A measure exceeding a measure it should be a subset of is the signature of fan-out from a non-distinct count on a view with a weak key.
+
+### 3.2 View provisioning and discovery
+
+- **Database views must not be provisioned in the shared model.** Resolve a missing view by bringing its schema into connection scope (§2).
+- **Establish that a view is missing before acting on it.** A model-wide `yaml-get` returns only views from currently-loaded schemas; views in offloaded or inactive schemas are absent from the response while remaining available. Run `omni models get-schemas` and, if the schema is listed, load it with `--includeschemas <SCHEMA>` (one schema per call) before concluding a view does not exist. The remedy for a genuinely missing view is a connection-scope change, so a false negative here widens data access unnecessarily.
+
+### 3.3 Query views
+
+- **Query views must either be modeled on a topic** (using the `query` parameters) **or reference all database tables, dimensions, and measures as `${database_view__table}` and fields as `${foo_bar__qux.zip}`.** No direct-table or direct-field references. In a query view's `sql:` block this means `${view_name}` rather than a hard-coded `CATALOG.SCHEMA.TABLE` path. This preserves the path to dbt virtual schemas and keeps the definition correct if the table moves.
+
+### 3.4 Field and column references
+
+- **No direct column references in migration-authored code.** Reference a field on the same view as `${zip}`, and a field on another view as `${foo_bar__qux.zip}`. Never reference a database column directly.
+- **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions where needed for custom dimensions.
+
+### 3.5 Measures
+
+- **Do not re-create built-in aggregates.** Declare the aggregate and keep `sql` to the value being aggregated: `aggregate_type: sum` with `sql: ${zip}`, not `sql: SUM(${zip})`.
+- **Use a measure `filters:` block rather than `CASE WHEN` for filtered aggregates.** In filter blocks, use the bare field name for fields on the measure's own view and fully qualify fields from a joined view. Booleans use the same `{ is: … }` operator form as every other field, not a bare scalar.
+- **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions for any aggregate with no built-in equivalent.
+
+### 3.6 Changes to existing views
+
+- **Adding fields to existing views is permitted.** Tag migration-added fields with the same migration tag used for topics (§4) so they remain identifiable after the merge.
+- **Placement is determined by join dependency.** A field whose `sql` references another view belongs in the topic's `views:` block, because not every topic containing the host view carries the required join (§4). A field that depends only on its own view's columns belongs on the view.
+- **Existing fields must not be changed.** No label, `hidden`, format, or `sql` changes. These alter something already in use, and the effect reaches every topic and every dashboard referencing the field — content the migration does not own and cannot assess. Adding a description where none exists is covered by §3.7 and is not a change in this sense.
+
+### 3.7 Descriptions
+
+- **Port descriptions from the source model.** Where the incumbent tool carries descriptions on its model objects — Looker's `description` on views, dimensions, measures, and explores, for example — migrate them to the Omni equivalent. This metadata is costly to recreate and is silently lost if the migration ignores it. The rule covers topics as well as views and fields.
+- **Never overwrite a description that already exists.** Where the Omni object already carries one, leave it. It reflects a decision made in Omni that the migrating party cannot evaluate, and the source description is not necessarily the more current of the two.
+- This is distinct from the prohibition in §4 on using `description` for provenance. Porting a description written by the source model's author carries existing metadata forward; authoring one means the migrating party characterizing an object it does not understand.
+
+### 3.8 Naming
+
+- **Treat names as permanent.** Content breaks on rename. Labels are cosmetic; names are not. Check net-new names for collisions, including collisions that appear only after view-name scoping.
+
+## 4. Topics
 
 - **Net-new topics must be identifiable as migration output.** This allows migration-driven work to be separated from pre-existing work after the merge. Carry provenance as metadata — a tag, plus topic-level `owners:` naming an accountable person. Do not use `description` or `ai_context` for this; the migrating party cannot characterize a topic's intended use, and an inaccurate characterization is worse than none.
 - **Notes on how the migrated content uses a topic belong in the topic as comments.** These record what the migration did, which the migrating party does know.
@@ -80,7 +126,7 @@ The following are prerequisites owned by the customer's data team. Migration too
 - **Topics must not duplicate existing topics.** If an existing topic can serve the query, use it.
 - **Consolidate net-new topics by base view, not by query.** One topic per base view, covering the union of join paths the migrated queries require. A topic's join graph costs only what a query references, so unused joins in a consolidated topic add no query-time cost.
   - *Exception:* a join-path or grain conflict — two different paths to the same view, or the same view needed at two grains — forces a split.
-  - *Accepted cost:* a wider field list and greater fan-out exposure. See §4 for fan-out.
+  - *Accepted cost:* a wider field list and greater fan-out exposure. See §3 for fan-out.
 - **Source content spanning multiple fact tables migrates to a composite topic, not a single topic.** Where the source combines measures from two or more fact tables at different grains against shared dimensions, joining them physically in one topic multiplies each fact's rows against the others before aggregation. Given correct primary keys and relationship types the results are still right — symmetric aggregates deduplicate on the key — but the query does far more work than the question requires, and the cost compounds with each additional fact. A composite topic aggregates each constituent topic independently in its own subquery and stitches the much smaller aggregated results on the conformed dimensions with a full outer join. Declare the conformed dimensions with `mappings:`, pointing each constituent topic at its own field.
   - **This is an exception to the consolidation rule above.** Consolidation assumes one base view with a join graph hanging off it. Multi-fact content has no single base view, and consolidating it produces exactly the physical join this rule avoids.
   - **Detection is a discovery obligation.** Tableau's relationships model handles multi-fact analysis natively, so source content relying on it looks unremarkable in the workbook. Identify content whose measures originate in more than one fact table before topics are authored, not at parity testing.
@@ -116,52 +162,6 @@ The following are prerequisites owned by the customer's data team. Migration too
   Promote the alias to a standalone `.view` file with a global relationship only once several topics need the same role. Until then the topic-scoped form keeps the definition next to its use.
 
 - **Before adding a topic-scoped field to an existing view, confirm the field does not already exist.** A field of the same name with different SQL is an override: queries through that topic use the topic-scoped definition while every other topic keeps the shared one. Overrides require explicit approval.
-
-## 4. Views, dimensions, and measures
-
-### 4.1 Primary keys and aggregation correctness
-
-- **Every view used in a migration-generated topic must have a declared primary key**, whether database view or query view. Omni keeps `sum`, `count`, and `avg` correct under one-to-many joins by deduplicating on the primary key; a view without one cannot be made symmetric, and a row-count measure on it inflates whenever a join duplicates its rows.
-  - A single unique column is declared with `primary_key: true` on that dimension.
-  - Where no single column is unique, use the built-in compound key: `custom_compound_primary_key_sql: [field_a, field_b]` at the view level, with no `primary_key: true` dimension. Do not hand-build a concatenated key expression. The same parameter accepts a single column where that is more convenient.
-  - Where no combination of columns is row-unique, do not declare a key at all. Fix the grain or do not join the view. A declared key that is not actually unique is worse than none.
-- **Validate fan-out and symmetric aggregation explicitly.** A declared primary key is necessary but not sufficient. Any measure reachable across a one-to-many join in a consolidated topic requires explicit validation. The consolidation rule in §3 increases exposure to this. A measure exceeding a measure it should be a subset of is the signature of fan-out from a non-distinct count on a view with a weak key.
-
-### 4.2 View provisioning and discovery
-
-- **Database views must not be provisioned in the shared model.** Resolve a missing view by bringing its schema into connection scope (§2).
-- **Establish that a view is missing before acting on it.** A model-wide `yaml-get` returns only views from currently-loaded schemas; views in offloaded or inactive schemas are absent from the response while remaining available. Run `omni models get-schemas` and, if the schema is listed, load it with `--includeschemas <SCHEMA>` (one schema per call) before concluding a view does not exist. The remedy for a genuinely missing view is a connection-scope change, so a false negative here widens data access unnecessarily.
-
-### 4.3 Query views
-
-- **Query views must either be modeled on a topic** (using the `query` parameters) **or reference all database tables, dimensions, and measures as `${database_view__table}` and fields as `${foo_bar__qux.zip}`.** No direct-table or direct-field references. In a query view's `sql:` block this means `${view_name}` rather than a hard-coded `CATALOG.SCHEMA.TABLE` path. This preserves the path to dbt virtual schemas and keeps the definition correct if the table moves.
-
-### 4.4 Field and column references
-
-- **No direct column references in migration-authored code.** Reference a field on the same view as `${zip}`, and a field on another view as `${foo_bar__qux.zip}`. Never reference a database column directly.
-- **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions where needed for custom dimensions.
-
-### 4.5 Measures
-
-- **Do not re-create built-in aggregates.** Declare the aggregate and keep `sql` to the value being aggregated: `aggregate_type: sum` with `sql: ${zip}`, not `sql: SUM(${zip})`.
-- **Use a measure `filters:` block rather than `CASE WHEN` for filtered aggregates.** In filter blocks, use the bare field name for fields on the measure's own view and fully qualify fields from a joined view. Booleans use the same `{ is: … }` operator form as every other field, not a bare scalar.
-- **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions for any aggregate with no built-in equivalent.
-
-### 4.6 Changes to existing views
-
-- **Adding fields to existing views is permitted.** Tag migration-added fields with the same migration tag used for topics (§3) so they remain identifiable after the merge.
-- **Placement is determined by join dependency.** A field whose `sql` references another view belongs in the topic's `views:` block, because not every topic containing the host view carries the required join (§3). A field that depends only on its own view's columns belongs on the view.
-- **Existing fields must not be changed.** No label, `hidden`, format, or `sql` changes. These alter something already in use, and the effect reaches every topic and every dashboard referencing the field — content the migration does not own and cannot assess. Adding a description where none exists is covered by §4.7 and is not a change in this sense.
-
-### 4.7 Descriptions
-
-- **Port descriptions from the source model.** Where the incumbent tool carries descriptions on its model objects — Looker's `description` on views, dimensions, measures, and explores, for example — migrate them to the Omni equivalent. This metadata is costly to recreate and is silently lost if the migration ignores it. The rule covers topics as well as views and fields.
-- **Never overwrite a description that already exists.** Where the Omni object already carries one, leave it. It reflects a decision made in Omni that the migrating party cannot evaluate, and the source description is not necessarily the more current of the two.
-- This is distinct from the prohibition in §3 on using `description` for provenance. Porting a description written by the source model's author carries existing metadata forward; authoring one means the migrating party characterizing an object it does not understand.
-
-### 4.8 Naming
-
-- **Treat names as permanent.** Content breaks on rename. Labels are cosmetic; names are not. Check net-new names for collisions, including collisions that appear only after view-name scoping.
 
 ## 5. dbt
 
@@ -321,7 +321,7 @@ Model validation returns a JSON array of issue objects carrying `is_warning`, `m
 
 **The bar is no net-new errors and no net-new warnings.**
 
-Warnings are fixed, not waived. The most common class, `No join path from …`, is produced by authoring a cross-view field in a view file rather than in the topic's `views:` block (§3). Correct placement eliminates it.
+Warnings are fixed, not waived. The most common class, `No join path from …`, is produced by authoring a cross-view field in a view file rather than in the topic's `views:` block (§4). Correct placement eliminates it.
 
 ### 13.2 Gate on `yaml_path`
 
@@ -396,7 +396,7 @@ An alternative to writing migration output into the shared model: give the migra
 
 **Advantages**
 
-- The provenance requirement in §3 becomes structural rather than a tagging convention.
+- The provenance requirement in §4 becomes structural rather than a tagging convention.
 - The ownership invariant in §9 holds by construction, since the migration is not writing to the shared model at all.
 - The migration is separable and revertible as a unit.
 - Content that does not belong in the shared model has an obvious home, which reduces pressure toward the workbook model.
