@@ -139,11 +139,12 @@ The following are prerequisites owned by the customer's data team. Migration too
 ### 4.4 Field and column references
 
 - **No direct column references in migration-authored code.** Reference a field on the same view as `${zip}`, and a field on another view as `${foo_bar__qux.zip}`. Never reference a database column directly.
-- **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions.
 
 ### 4.5 Measures
 
-- **Use a measure `filters:` block rather than `CASE WHEN` for filtered aggregates.** Keep `sql` limited to the value being aggregated. In filter blocks, use the bare field name for fields on the measure's own view and fully qualify fields from a joined view. Booleans use the same `{ is: … }` operator form as every other field, not a bare scalar.
+- **Do not re-create built-in aggregates.** Declare the aggregate and keep `sql` to the value being aggregated: `aggregate_type: sum` with `sql: ${zip}`, not `sql: SUM(${zip})`. The declared `aggregate_type` is what Omni uses to reason about the measure; aggregation buried in `sql` is opaque to it.
+- **Use a measure `filters:` block rather than `CASE WHEN` for filtered aggregates.** In filter blocks, use the bare field name for fields on the measure's own view and fully qualify fields from a joined view. Booleans use the same `{ is: … }` operator form as every other field, not a bare scalar.
+- **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions for any aggregate with no built-in equivalent.
 
 ### 4.6 Changes to existing views
 
