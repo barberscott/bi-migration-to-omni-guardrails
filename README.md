@@ -64,6 +64,7 @@ The following are prerequisites owned by the customer's data team. Migration too
 
 - **Schema refresh.** Run a schema refresh before the migration branch is opened. Many "not found" validation errors are stale-schema artifacts rather than real breakage, and a baseline taken against a stale schema cannot distinguish the two. Refresh requires Connection Admin. Some connections reject branch-scoped refresh, so a shared refresh is the only option on those connections, which is why this cannot sit inside the migration's branch.
 - **Connection schema scope.** If a required database view is not in scope for the connection, the connection must be edited to bring its schema into scope. Widening scope exposes every table in that schema to every modeler on that connection, so this requires data-team approval.
+- **Virtual schemas.** Where the customer intends to use dbt virtual schemas, they must exist before the migration begins (§5).
 - **Model access for the migrating identity.** Branching requires full-model access. Confirm with `omni whoami whoami --modelid <modelId>` before work begins.
 - **Content inventory and triage.** A named owner determines what is in scope. Without an explicit in-scope list, dead and duplicated source content is reproduced along with everything else.
 - **Target model.** Decide which model receives the migration's output (§9).
@@ -165,7 +166,8 @@ The following are prerequisites owned by the customer's data team. Migration too
 
 ## 5. dbt
 
-- If dbt is integrated, everything must be built off virtual schemas.
+- **If dbt is integrated, everything must be built off virtual schemas.**
+- **Virtual schemas must be in place before the migration begins.** Where the customer intends to use them, standing them up is a precondition (§2) rather than migration work. Authoring against physical schemas and converting afterwards means reworking every view, query view, and topic the migration produced.
 
 ---
 
