@@ -142,7 +142,7 @@ The following are prerequisites owned by the customer's data team. Migration too
 
 ### 4.5 Measures
 
-- **Do not re-create built-in aggregates.** Declare the aggregate and keep `sql` to the value being aggregated: `aggregate_type: sum` with `sql: ${zip}`, not `sql: SUM(${zip})`. The declared `aggregate_type` is what Omni uses to reason about the measure; aggregation buried in `sql` is opaque to it.
+- **Do not re-create built-in aggregates.** Declare the aggregate and keep `sql` to the value being aggregated: `aggregate_type: sum` with `sql: ${zip}`, not `sql: SUM(${zip})`.
 - **Use a measure `filters:` block rather than `CASE WHEN` for filtered aggregates.** In filter blocks, use the bare field name for fields on the measure's own view and fully qualify fields from a joined view. Booleans use the same `{ is: … }` operator form as every other field, not a bare scalar.
 - **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions for any aggregate with no built-in equivalent.
 
