@@ -84,7 +84,6 @@ The following are prerequisites owned by the customer's data team. Migration too
 - **Source content spanning multiple fact tables migrates to a composite topic, not a single topic.** Where the source combines measures from two or more fact tables at different grains against shared dimensions, a single Omni topic joining them physically produces fan-out and wrong numbers. A composite topic aggregates each constituent topic independently in its own subquery and stitches the results on the conformed dimensions with a full outer join, so every measure is computed at its own grain. Declare the conformed dimensions with `mappings:`, pointing each constituent topic at its own field.
   - **This is an exception to the consolidation rule above.** Consolidation assumes one base view with a join graph hanging off it. Multi-fact content has no single base view, and forcing it into one is the failure this rule exists to prevent.
   - **Detection is a discovery obligation.** Tableau's relationships model handles multi-fact analysis natively, so source content relying on it looks unremarkable in the workbook. Identify content whose measures originate in more than one fact table before topics are authored, not at parity testing.
-- **Curate fields on wide topics.** Consolidation produces broad topics, and AI accuracy degrades as a topic approaches roughly 550 fields. Where a consolidated topic is that wide, curate with `ai_fields`.
 - **Cross-view fields belong in the topic's `views:` block, not in a view file.** A dimension or measure whose `sql` references `${other_view.field}` depends on that view being joined, which is not guaranteed in every topic containing the host view. Defining it in the view file produces validator errors in every topic that includes the host view without the referenced view, cascading across topics that are otherwise correct. Define it in the topic, where the join context is explicit. Only put a cross-view field in a view file when the referenced view is joined in every topic that includes the host view.
 - **Check the global relationships file before authoring a topic-scoped relationship.** If a join between the same two views already exists in either direction with the same `on_sql`, the topic-scoped copy is redundant — use `joins` alone. If the `on_sql` differs, use the extended-views pattern rather than silently overriding the global join.
 - **Join the same view multiple ways with the extended-views pattern**, not `join_to_view_as`. The error `relationship alias duplicates view name` indicates the wrong pattern was used.
@@ -274,7 +273,16 @@ These are properties of the YAML write API that silently produce wrong results w
 - **`branchId` must be a server-issued UUID.** Passing a branch name returns `400 Unrecognized key: "branchName"`.
 - **Topic file names normalize to the repository root**, and the topic name is the filename stem rather than the view-scoped name. Pass that stem as both `topicName` and `join_paths_from_topic_name`.
 - **Know which layer you are reading.** `yaml-get` returns the extension layer by default — the authored deltas only. `--mode combined` returns the composed result, schema base included.
-- **Omni dedups a write against a resolvable schema base, and the declared `mode` does not change that.** Verified on a scratch model: a 646-byte combined view body differing from the base by one label persisted an 83-byte authored layer containing only that label, identically under `mode: combined` and `mode: extension`. Writes default to `mode: combined`. Do not select a write mode expecting it to control bloat — the operative variable is whether the base resolves.
+- **Never write with `mode: merged`.** Write modes differ in what the posted YAML is deduplicated against, and this is the source of authored-layer bloat. Posting one 646-byte view body — a combined read differing from the schema base by a single label — produced these authored layers:
+
+  | Write mode | Authored layer |
+  |---|---|
+  | `combined` (default) | 83 bytes — the label only |
+  | `extension` | 83 bytes |
+  | `staged` | 83 bytes |
+  | `merged` | **646 bytes — every schema base dimension materialized** |
+
+  `merged` composes the shared and branch layers without the schema layer, so there is no base to deduplicate against and every schema-derived dimension is persisted as authored content. The default is correct; select a mode deliberately or not at all.
 - **Assert the authored layer after every write.** Read back with `--mode extension` and confirm it contains only the intended delta and not a materialized copy of the schema base. Dedup depends on the base being resolvable, so a write against a view whose base does not resolve — an offloaded or inactive schema, a table no longer present — persists the whole posted body as authored content. Model bloat accrues silently this way and is expensive to unwind later.
 
 ## 11. Manifest, idempotency, and rollback
