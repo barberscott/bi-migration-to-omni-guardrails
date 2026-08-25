@@ -274,7 +274,9 @@ These are properties of the YAML write API that silently produce wrong results w
 - **`success: true` means accepted, not correct.** After every write, re-list files and confirm the object does not now exist at two paths, and read the file back to confirm the intended content landed.
 - **`branchId` must be a server-issued UUID.** Passing a branch name returns `400 Unrecognized key: "branchName"`.
 - **Topic file names normalize to the repository root**, and the topic name is the filename stem rather than the view-scoped name. Pass that stem as both `topicName` and `join_paths_from_topic_name`.
-- **Read back with the right mode.** `yaml-get` returns the extension layer by default — the authored deltas only. Use `--mode combined` to see what the model actually resolves to.
+- **Know which layer you are reading.** `yaml-get` returns the extension layer by default — the authored deltas only. `--mode combined` returns the composed result, schema base included.
+- **Writes default to `mode: combined`.** Where the posted YAML resolves against a live schema base, Omni dedups against that base and persists only the delta to the authored layer. Verified on a scratch model: posting a full 646-byte combined view body that differed from the base by one label stored an 83-byte authored layer containing just that label.
+- **Assert the authored layer after every write.** Read back with `--mode extension` and confirm it contains only the intended delta and not a materialized copy of the schema base. Dedup depends on the base being resolvable, so a write against a view whose base does not resolve — an offloaded or inactive schema, a table no longer present — persists the whole posted body as authored content. Model bloat accrues silently this way and is expensive to unwind later.
 
 ## 11. Manifest, idempotency, and rollback
 
