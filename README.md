@@ -148,7 +148,10 @@ The following are prerequisites owned by the customer's data team. Migration too
 
 ### 4.6 Changes to existing views
 
-- **No net-new fields on existing views.** No relabeling, no `hidden` changes, no format changes on existing fields. Migration-authored calculations go in a migration-owned extension view or query view.
+- **A field added to a shared view appears in every topic that includes that view.** This is the consequence to weigh before adding one: it changes the field list of pre-existing topics the migration does not own, and it cannot be scoped back out selectively, because excluding it from a pre-existing topic would mean editing that topic (§3).
+- **Where the field is only needed by migrated content, define it topic-scoped** in the migration's own topic `views:` block. It is then invisible to every other topic, and no pre-existing topic changes.
+- **Where the field genuinely belongs on the shared view, adding it is permitted** with the model owner's approval, since pre-existing topics inherit it. Tag it with the same migration tag used for topics (§3) so migration-added fields remain identifiable after the merge.
+- **Changes to existing fields** — label, `hidden`, format, or `sql` — alter something already in use by content the migration does not own. These require explicit approval from the model owner and are not in the migration's default scope.
 
 ### 4.7 Naming
 
