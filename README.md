@@ -282,7 +282,7 @@ These are properties of the YAML write API that silently produce wrong results w
   | `staged` | 83 bytes |
   | `merged` | **646 bytes — every schema base dimension materialized** |
 
-  `merged` composes the shared and branch layers without the schema layer, so there is no base to deduplicate against and every schema-derived dimension is persisted as authored content. The default is correct; select a mode deliberately or not at all.
+  The reason is the pruning pass. A save in `extension` or `staged` is followed by an automatic re-save in combined mode that strips properties already supplied by the schema layer; `combined` needs no such pass because it prunes on the way in. `merged` is excluded from it, so whatever was posted persists as authored content. The default is correct; select a mode deliberately or not at all.
 - **Assert the authored layer after every write.** Read back with `--mode extension` and confirm it contains only the intended delta and not a materialized copy of the schema base. Dedup depends on the base being resolvable, so a write against a view whose base does not resolve — an offloaded or inactive schema, a table no longer present — persists the whole posted body as authored content. Model bloat accrues silently this way and is expensive to unwind later.
 
 ## 11. Manifest, idempotency, and rollback
