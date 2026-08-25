@@ -93,9 +93,7 @@ Forbidden absent an approved exception:
 
 ## 6. Access and row-level controls
 
-Row-level security in Omni is topic-only. `access_filters`, `always_where_sql`, and `always_where_filters` are topic parameters; views do not carry them. A net-new topic therefore has nothing to inherit — it starts as an unfiltered surface, and the migration must reconstruct the gating.
-
-Object-level gating differs. `required_access_grants` exists at view and field level as well as topic level, so grants on an existing view carry into any topic using it. Grants control whether a user sees an object; they do not filter rows.
+Row-level security in Omni is topic-only. A net-new topic has nothing to inherit: it starts as an unfiltered surface, and the migration must reconstruct the gating.
 
 ### 6.1 Discovery
 
