@@ -139,6 +139,7 @@ The following are prerequisites owned by the customer's data team. Migration too
 ### 4.4 Field and column references
 
 - **No direct column references in migration-authored code.** Reference a field on the same view as `${zip}`, and a field on another view as `${foo_bar__qux.zip}`. Never reference a database column directly.
+- **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions where needed for custom dimensions.
 
 ### 4.5 Measures
 
