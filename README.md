@@ -148,9 +148,8 @@ The following are prerequisites owned by the customer's data team. Migration too
 
 ### 4.6 Changes to existing views
 
-- **A field added to a shared view appears in every topic that includes that view.** This is the consequence to weigh before adding one: it changes the field list of pre-existing topics the migration does not own, and it cannot be scoped back out selectively, because excluding it from a pre-existing topic would mean editing that topic (§3).
-- **Where the field is only needed by migrated content, define it topic-scoped** in the migration's own topic `views:` block. It is then invisible to every other topic, and no pre-existing topic changes.
-- **Where the field genuinely belongs on the shared view, adding it is permitted** with the model owner's approval, since pre-existing topics inherit it. Tag it with the same migration tag used for topics (§3) so migration-added fields remain identifiable after the merge.
+- **Adding fields to existing views is permitted.** Tag migration-added fields with the same migration tag used for topics (§3) so they remain identifiable after the merge.
+- **Placement is determined by join dependency.** A field whose `sql` references another view belongs in the topic's `views:` block, because not every topic containing the host view carries the required join (§3). A field that depends only on its own view's columns belongs on the view.
 - **Existing fields must not be changed.** No label, `hidden`, format, or `sql` changes. These alter something already in use, and the effect reaches every topic and every dashboard referencing the field — content the migration does not own and cannot assess. Adding a description where none exists is covered by §4.7 and is not a change in this sense.
 
 ### 4.7 Descriptions
