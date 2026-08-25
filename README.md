@@ -84,7 +84,6 @@ The following are prerequisites owned by the customer's data team. Migration too
   - *Exception:* a join-path or grain conflict — two different paths to the same view, or the same view needed at two grains — forces a split.
   - *Accepted cost:* a wider field list and greater fan-out exposure. See §4 and §8.
 - **Cross-view fields belong in the topic's `views:` block, not in a view file.** A dimension or measure whose `sql` references `${other_view.field}` depends on that view being joined, which is not guaranteed in every topic containing the host view. Defining it in the view file produces validator errors in every topic that includes the host view without the referenced view, cascading across topics that are otherwise correct. Define it in the topic, where the join context is explicit. Only put a cross-view field in a view file when the referenced view is joined in every topic that includes the host view.
-- **Declare both `joins` and `relationships` where a topic-scoped join is used.** `joins` declares which views are in the topic; `relationships` defines the conditions. A topic that uses only global relationships needs `joins` alone. Omitting `joins` while supplying `relationships` passes validation and silently fails to expose the joined view's fields (§14.3).
 - **Check the global relationships file before authoring a topic-scoped relationship.** If a join between the same two views already exists in either direction with the same `on_sql`, the topic-scoped copy is redundant — use `joins` alone. If the `on_sql` differs, use the extended-views pattern rather than silently overriding the global join.
 - **Join the same view multiple ways with the extended-views pattern**, not `join_to_view_as`. The error `relationship alias duplicates view name` indicates the wrong pattern was used.
 - **Before adding a topic-scoped field to an existing view, confirm the field does not already exist.** A field of the same name with different SQL is an override: queries through that topic use the topic-scoped definition while every other topic keeps the shared one. Overrides require explicit approval.
@@ -207,7 +206,7 @@ Net-new topics are quarantined from AI and from the topic picker until reviewed 
 - **Tooling must not write `ai_chat_topics`.** An empty list disables AI chat for the whole model. Configuration is a one-time human prerequisite (§2).
 - **The value must preserve existing topics.** Where no property was previously set, use `[all_topics, -tag:<migration tag>]`; omitting `all_topics` removes every existing topic from AI. Where an explicit list already exists, append the negation rather than replacing the list.
 - **Hiding a topic does not break content built on it.** `hidden: true` removes the topic from the workbook picker; saved content continues to query it.
-- **Apply `hidden` last.** A topic carrying `hidden: true` returns 404 from `get-topic` while still validating clean, so the §14.3 exposure gate cannot inspect it. Run the exposure check first.
+- **`hidden` interacts with the topic-level exposure fallback.** A topic carrying `hidden: true` returns 404 from `get-topic` while still validating clean. Running queries is unaffected. Where the §14.3 fallback is in use, apply the quarantine flag after that check.
 - **This is not a security control.** It governs AI chat and discoverability only. Access control is §7.
 - **Consolidated topics are wide.** AI field curation becomes necessary as a topic approaches roughly 550 fields, so `ai_fields` curation belongs in the approval review.
 
@@ -291,25 +290,21 @@ The two commands use different flag spellings (`--branchid` and `--branch-id`). 
 
 Filter issues by `yaml_path` against the files the migration owns (§10) rather than diffing branch against main. This is unaffected by base changes during the branch's life, and it prevents new breakage being attributed to pre-existing noise.
 
-### 14.3 Topic exposure gate
+### 14.3 Query-level checks
 
-A topic-scoped `relationships` entry written without the corresponding view `joins` entry validates clean, but the joined view's fields are not exposed and queries against them return empty. Model validation does not detect this.
+For every migrated query, confirm in the response that `summary.missing_fields` is `[]` and that `summary.invalid_calculations` is empty. Note that `invalid_calculations` returns as `{}` rather than `[]`.
 
-For every net-new topic, confirm the resolved field set:
+A non-empty `missing_fields` is the catch-all for a field that did not resolve: a model file dropped or renamed during a write or merge, or a topic whose joined view was declared in `relationships` without a corresponding `joins` entry — a combination that validates clean while leaving the joined view's fields unexposed.
+
+**Fallback for query-restricted instances.** Where queries cannot be executed, assert exposure at the topic level instead:
 
 ```
 omni models get-topic <modelId> <topicName> --branch-id <branchId>
 ```
 
-The response must contain every field the migrated content references.
+The response must contain every field the migrated content references. This is weaker than running the queries, since it tests a field list rather than execution. If it is used, note that a topic marked `hidden: true` returns 404 from this endpoint while still validating clean, so the quarantine flag in §8 must be applied after this check rather than before.
 
-Ordering constraint: a topic marked `hidden: true` returns 404 from this endpoint while still validating clean. Run this gate before applying the quarantine flag in §8.
-
-### 14.4 Query-level checks
-
-For every migrated query, confirm in the response that `summary.missing_fields` is `[]` and `summary.invalid_calculations` is empty. Note that `invalid_calculations` returns as `{}` rather than `[]`. A non-empty `missing_fields` means a field did not resolve, which is the signature of a model file dropped or renamed during a write or merge.
-
-### 14.5 Content validator
+### 14.4 Content validator
 
 The content validator reports broken references in saved content. It does not evaluate whether results are correct.
 
@@ -326,11 +321,11 @@ Mechanics:
 - Drafts are returned alongside published documents with `type: "draft"`. Migration output held in drafts is therefore in scope. Only documents cleared to zero query presentations are omitted.
 - Consume the API response rather than the user interface. The validator's search filters on field, view, and topic references parsed from query definitions and does not read issue text. Breakage originating in the model, such as a broken `always_where` on a topic, attaches an error to every tile while the document contains no matching reference, so those rows cannot be reached through the interface filter. The errors are present in the API response.
 
-### 14.6 Sequencing
+### 14.5 Sequencing
 
 Verify written YAML with a read-back (§11) before interpreting any validator output. Validator results against a branch whose contents differ from expectation are not meaningful.
 
-### 14.7 No enforcement at merge
+### 14.6 No enforcement at merge
 
 Omni provides no dry-run and no server-side gate. A branch carrying blocking validation errors can be merged. Every gate in this section is procedural and depends on the review process.
 
