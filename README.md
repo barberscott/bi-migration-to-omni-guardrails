@@ -138,7 +138,7 @@ The following are prerequisites owned by the customer's data team. Migration too
 
 ### 4.4 Field and column references
 
-- **No direct column references in migration-authored code.** All column references use `${foo_bar__qux.zip}` notation. There is no `${TABLE}` construct; `${TABLE}.column` fails at validation and query time with `Column "__omni_scoped" not found`. A raw column auto-maps by name and needs no `sql:` at all.
+- **No direct column references in migration-authored code.** All column references use `${foo_bar__qux.zip}` notation.
 - **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions.
 
 ### 4.5 Measures
