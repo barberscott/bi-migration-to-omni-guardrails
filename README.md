@@ -1,31 +1,375 @@
 # Automated BI Migration to Omni — Guardrails
 
 **Status:** Draft
-**Audience:** Teams building automated migration tooling that targets Omni.
-**Scope:** Any engagement where tooling migrates content from another BI tool into Omni. Tool-agnostic and customer-agnostic.
+**Audience:** Omni developers generally, and teams building automated migration tooling that targets Omni.
+**Scope:** General Omni development standards, plus any engagement where tooling migrates content from another BI tool into Omni. Tool-agnostic and customer-agnostic.
 
 ## Purpose
 
-This document lists the conditions a migration must satisfy to be accepted. It states requirements, not implementation approaches.
+This document lists the conditions a migration must satisfy to be accepted, and the general development standards that apply to Omni work whether or not it involves a migration. It states requirements, not implementation approaches.
 
 Where a requirement depends on a specific Omni mechanism, the mechanism is named so the requirement can be tested. Where Omni does not enforce a requirement itself, that is stated; several of the gates below are procedural only.
 
-Two constraints shape most of the rules:
+Two constraints shape most of the migration-specific rules:
 
 - The migrating party has no way to determine the intent behind existing model objects. Rules that forbid modifying existing objects follow from this.
 - Content that renders correctly can still return wrong numbers. Structural rules are necessary but not sufficient, and parity (§15) is a separate gate.
 
-The document is in four parts: preconditions the customer owns, standards the output must meet, hygiene the development process must follow, and the gates that determine acceptance.
+The document has two top-level sections: **Basic Development Guidelines**, baseline standards that apply to any Omni development work, and **Advanced Development & Migration Guidelines**, which covers preconditions the customer owns, standards the output must meet, hygiene the development process must follow, and the gates that determine acceptance for automated migrations specifically.
 
 ---
 
-# Part I — Alignment, preconditions, and discovery
+# 1. Basic Development Guidelines
 
-## 1. Customer alignment
+Baseline standards that apply to any Omni development work, migration or otherwise.
+
+## Dashboards
+
+### Tile alignment
+
+All tiles must be aligned with no unnecessary empty spaces. Gaps between tiles imply missing content or poor UX skills and create a poor viewer experience. Use the grid snap to ensure tiles sit flush against each other.
+
+### Logo/image tiles
+
+Logo tiles must use dynamic sizing so they scale correctly across screen sizes. Avoid fixed pixel dimensions.
+
+### Consistent typography
+
+Tile titles, subtitles, and fonts must be consistent throughout the dashboard. Do not mix font sizes or styles across tiles; pick one treatment and apply it everywhere.
+
+### Axis formatting
+
+All numeric axes must be formatted using **Use abbreviations for large numbers**. This prevents axis labels like 1,000,000 and replaces them with 1M.
+
+### Dashboard naming conventions
+
+Dashboard titles must follow a consistent naming convention, including:
+
+- Consistent capitalisation (e.g. Title Case throughout)
+- Agreed prefix or suffix keywords (e.g. `[Finance] Revenue Overview`, `Sales | Pipeline Report`)
+
+Pick a convention at the start of a project and apply it uniformly.
+
+## Workbooks
+
+### Meaningful tab names
+
+All workbook tabs must have meaningful names that reflect their content. Generic defaults like `Query 1` or `Query 1 Copy` are not acceptable.
+
+| **Bad** | **Good** |
+|---|---|
+| Query 1 | Weekly Sales |
+| Query 2 Copy | Customer Churn Rate |
+| Sheet 3 | Inventory by Region |
+
+### Remove unnecessary tabs
+
+Any tab not contributing to the workbook's purpose must be removed before handover. This includes exploratory or scratch queries left over from development.
+
+## Modeling
+
+### Cross-view fields scoped to the topic
+
+Fields whose SQL references another view (e.g. `${users.name}`) must be defined in the topic's `views:` block, not in the view file. A field defined in a view file that references a joined view will produce `No join path from...` validator warnings in every topic that includes the host view without that join.
+
+**Wrong — defined in the view file:**
+
+```yaml
+# order_items.view
+dimensions:
+  customer_name:
+    sql: ${users.name}   # users may not be joined in every topic
+    type: string
+```
+
+**Correct — defined in the topic:**
+
+```yaml
+# orders.topic
+base_view: order_items
+
+joins:
+  users: {}
+
+views:
+  order_items:
+    dimensions:
+      customer_name:
+        sql: ${users.name}   # safe; users is joined in this topic
+        type: string
+```
+
+### Filtered measures use `filters:`, not `CASE WHEN`
+
+Filtered aggregates must use the `filters:` parameter. The `sql` field should contain only the value being aggregated.
+
+**Wrong:**
+
+```yaml
+measures:
+  cancelled_orders:
+    sql: CASE WHEN ${status} = 'cancelled' THEN ${order_id} END
+    aggregate_type: count
+```
+
+**Correct:**
+
+```yaml
+measures:
+  cancelled_orders:
+    aggregate_type: count
+    sql: ${order_id}
+    filters:
+      - field: status
+        is: "cancelled"
+```
+
+### Filtered measure names
+
+Filtered measures must have names that make the filter obvious. If a measure counts orders filtered to `status = 'cancelled'`, name it `cancelled_orders`, not `orders`.
+
+### Primary keys on all views
+
+Every view must have a declared and verified primary key. This is required for Omni to compute symmetric aggregation correctly across joins.
+
+- Single unique column: add `primary_key: true` to that dimension.
+- No single unique column: use `custom_compound_primary_key_sql: [field_a, field_b]` at the view level.
+
+### Validated relationship types
+
+All relationships must have an explicitly set and validated `relationship_type`. Do not leave it unset or guess; an incorrect relationship type causes fan-out and wrong aggregates.
+
+```yaml
+relationships:
+  - join_from_view: order_items
+    join_to_view: orders
+    on_sql: ${order_items.order_id} = ${orders.id}
+    relationship_type: many_to_one   # verified, not assumed
+    join_type: always_left
+```
+
+### Modeling in the shared model
+
+All modeling must be added to the shared model. Workbook-level modeling is permitted only in rare cases where there is a strong justification. Any exception must:
+
+- Be documented with a clear rationale
+- Be signed off by the MA/SA or customer lead
+
+### Tags for fields used across multiple topics
+
+Dimensions and measures that appear in multiple topics should be included using the `tags:` parameter in the fields block instead of individually called in each topic.
+
+```yaml
+dimensions:
+  region:
+    type: string
+    tags: ["geography"]
+  country:
+    type: string
+    tags: ["geography"]
+```
+
+```yaml
+# orders.topic
+fields: [ orders.*, tag:geography ]
+```
+
+### Field ordering with `order_by_field`
+
+If a field's values should appear in a specific order (e.g. Low, Medium, High), use `order_by_field` to point to a secondary numeric field that controls sort order rather than relying on alphabetical ordering or other workarounds.
+
+```yaml
+dimensions:
+  priority_label:
+    type: string
+    order_by_field: priority_sort_order
+
+  priority_sort_order:
+    type: number
+    hidden: true
+    sql: >
+      CASE ${priority_label}
+        WHEN 'Low' THEN 1
+        WHEN 'Medium' THEN 2
+        WHEN 'High' THEN 3
+      END
+```
+
+### No SQL on pass-through dimensions
+
+Dimensions that map directly to a same-named raw column must not include a `sql:` statement. Omni auto-maps by column name.
+
+**Wrong:**
+
+```yaml
+dimensions:
+  created_at:
+    sql: created_at
+    type: time
+```
+
+**Correct:**
+
+```yaml
+dimensions:
+  created_at:
+    type: time
+```
+
+### Renamed dimensions reference the original; original is hidden
+
+When a dimension needs a different name from the raw column, create a new dimension with the new name that references the original Omni dimension. Hide the original.
+
+```yaml
+dimensions:
+  created_at:       # raw column, auto-mapped
+    hidden: true
+
+  order_date:       # renamed version for end users
+    sql: ${created_at}
+    type: time
+    label: Order Date
+```
+
+### Do not use `sum_distinct_on` to bypass incorrect primary keys
+
+`aggregate_type: sum_distinct_on` and `average_distinct_on` are only valid when the aggregation genuinely needs to be distinct on a field that differs from the view's primary key. Do not use them to suppress fan-out caused by a missing or incorrectly defined primary key; fix the primary key instead.
+
+**Wrong — patching a missing primary key:**
+
+```yaml
+measures:
+  total_revenue:
+    aggregate_type: sum_distinct_on
+    sql: ${revenue}
+    distinct_on: ${order_id}   # masking duplicates, not a genuine distinct-on need
+```
+
+**Correct — define the primary key and use a standard sum:**
+
+```yaml
+dimensions:
+  order_id:
+    primary_key: true
+    type: number
+
+measures:
+  total_revenue:
+    aggregate_type: sum
+    sql: ${revenue}
+```
+
+### Measures use Omni field references
+
+Measures that reference other fields must use the Omni `${}` reference syntax, not the raw column name.
+
+**Wrong:**
+
+```yaml
+measures:
+  total_revenue:
+    sql: sale_value * quantity
+    aggregate_type: sum
+```
+
+**Correct:**
+
+```yaml
+measures:
+  total_revenue:
+    sql: ${sale_value} * ${quantity}
+    aggregate_type: sum
+```
+
+## SQL Standards
+
+### Capitalised SQL syntax
+
+All SQL keywords must be capitalised, unless the customer has specified otherwise.
+
+**Wrong:**
+
+```sql
+select
+  order_id,
+  sum(sale_value) as total_revenue
+from orders
+where status = 'complete'
+group by 1
+```
+
+**Correct:**
+
+```sql
+SELECT
+  order_id,
+  SUM(sale_value) AS total_revenue
+FROM orders
+WHERE status = 'complete'
+GROUP BY 1
+```
+
+### Trailing commas in SELECT statements
+
+SELECT statements must use trailing commas, unless the customer has specified otherwise.
+
+**Wrong:**
+
+```sql
+SELECT
+    order_id
+  , customer_id
+  , sale_value
+FROM orders
+```
+
+**Correct:**
+
+```sql
+SELECT
+  order_id,
+  customer_id,
+  sale_value
+FROM orders
+```
+
+## Development Standards
+
+### Use branches for shared model changes
+
+All changes to the shared model must be made on a branch, not directly on main.
+
+### Branch naming convention
+
+Branches must follow the naming convention: `<developer>/branch-name`
+
+For example: `jsmith/add-revenue-metrics` or `jsmith/fix-order-joins`
+
+### No model validation errors on merge
+
+There must be zero model validation errors on the branch before it is merged.
+
+### No net-new Content Validator errors on merge
+
+There must be no Content Validator errors in the shared folder or personal folders when the branch is merged.
+
+### Content Validator fixes use branches
+
+Fixes to Content Validator errors must be made using branches, following the same process as any other model change.
+
+---
+
+# 2. Advanced Development & Migration Guidelines
+
+Guardrails specific to automated migration tooling that targets Omni, and the development hygiene and acceptance gates around it. Builds on the basic guidelines above.
+
+## Part I — Alignment, preconditions, and discovery
+
+### 1. Customer alignment
 
 Agreements to reach before any migration work begins. These are organizational rather than technical, and the gates in Part IV cannot be evaluated without them.
 
-### 1.1 Model freeze
+#### 1.1 Model freeze
 
 **The customer freezes the target shared model for the duration of the migration.** For the freeze window: no changes to views, topics, relationships, or model-level settings; no schema refreshes; no connection-scope or connection-environment changes.
 
@@ -37,11 +381,11 @@ This is required by Omni's branch semantics, not by convention:
 
 **Define the exception path.** Where a change cannot wait, require notification before it lands, a re-baseline of both validators, and re-validation of any migrated content touching the affected files. Record each exception in the manifest (§12).
 
-### 1.2 Source system freeze
+#### 1.2 Source system freeze
 
 The in-scope source content is frozen for the same window. Parity (§15) compares migrated output against the source tool, which requires the source to hold still.
 
-### 1.3 Named owners
+#### 1.3 Named owners
 
 Name these roles before work begins:
 
@@ -51,14 +395,14 @@ Name these roles before work begins:
 - **Content inventory and triage** — the owner of the in-scope decision (§2).
 - **Access gating** — the source content owner who confirms user-attribute mappings (§9.2).
 
-### 1.4 Agreed scope and tolerances
+#### 1.4 Agreed scope and tolerances
 
 - **The in-scope content list is agreed and recorded** before work begins. Excluded content is recorded with a reason (§12).
 - **Numeric parity tolerance is agreed**, including whether it varies by metric class (§15).
 
 ---
 
-## 2. Preconditions
+### 2. Preconditions
 
 The following are prerequisites owned by the customer's data team. Migration tooling must not perform them.
 
@@ -71,11 +415,11 @@ The following are prerequisites owned by the customer's data team. Migration too
 
 ---
 
-## 3. Discovery
+### 3. Discovery
 
 Findings the migration must produce before topics are authored or content is built. Each one settles a decision that is expensive to reverse once work is under way. Producing them belongs to the migrating party and to the export side of their tooling, since it depends on source-system expertise.
 
-### 3.1 Platform and model context
+#### 3.1 Platform and model context
 
 - **dbt usage and virtual schema intent.** Whether dbt is integrated and whether the customer intends to use virtual schemas. Determines what everything is built against (§6); the schemas must exist before work begins (§2).
 - **Connection dialect**, read from the connection rather than inferred from its name. Determines the SQL available for custom dimensions and for aggregates with no built-in equivalent (§4.4, §4.5).
@@ -83,7 +427,7 @@ Findings the migration must produce before topics are authored or content is bui
 - **Existing model coverage** — the topics and views already present that could serve migrated queries. Without this the rule against duplicating existing topics (§5) cannot be honoured.
 - **The current validation baseline** — errors and warnings already present on the target model, so that net-new ones can be distinguished (§14).
 
-### 3.2 Source content
+#### 3.2 Source content
 
 - **The in-scope content list** and the owner of each item (§1.3, §1.4).
 - **Attribute-filtered content.** Which source content is gated or pre-filtered by user attributes, the gating expression, and the population it applies to. For each in-scope source object, record whether it is gated and how. There is no established practice for this among migration vendors today, so it should be scoped explicitly rather than assumed. Feeds §9.
@@ -96,11 +440,11 @@ Findings the migration must produce before topics are authored or content is bui
 
 ---
 
-# Part II — Modeling and content standards
+## Part II — Modeling and content standards
 
-## 4. Views, dimensions, and measures
+### 4. Views, dimensions, and measures
 
-### 4.1 Primary keys and aggregation correctness
+#### 4.1 Primary keys and aggregation correctness
 
 - **Every view used in a migration-generated topic must have a declared primary key**, whether database view or query view. Omni keeps `sum`, `count`, and `avg` correct under one-to-many joins by deduplicating on the primary key; a view without one cannot be made symmetric, and a row-count measure on it inflates whenever a join duplicates its rows.
   - A single unique column is declared with `primary_key: true` on that dimension.
@@ -108,45 +452,45 @@ Findings the migration must produce before topics are authored or content is bui
   - Where no combination of columns is row-unique, do not declare a key at all. Fix the grain or do not join the view. A declared key that is not actually unique is worse than none.
 - **Validate fan-out and symmetric aggregation explicitly.** A declared primary key is necessary but not sufficient. Any measure reachable across a one-to-many join in a consolidated topic requires explicit validation. The consolidation rule in §5 increases exposure to this. A measure exceeding a measure it should be a subset of is the signature of fan-out from a non-distinct count on a view with a weak key.
 
-### 4.2 View provisioning and discovery
+#### 4.2 View provisioning and discovery
 
 - **Database views must not be provisioned in the shared model.** Resolve a missing view by bringing its schema into connection scope (§2).
 - **Never delete database views.** A view the migration has no use for may be in use by content it does not own, and the migrating party cannot establish otherwise. Removing one is a model-owner decision outside the migration's scope, and it holds even where the view appears unused by everything being migrated.
 - **Establish that a view is missing before acting on it.** A model-wide `yaml-get` returns only views from currently-loaded schemas; views in offloaded or inactive schemas are absent from the response while remaining available. Run `omni models get-schemas` and, if the schema is listed, load it with `--includeschemas <SCHEMA>` (one schema per call) before concluding a view does not exist. The remedy for a genuinely missing view is a connection-scope change, so a false negative here widens data access unnecessarily.
 
-### 4.3 Query views
+#### 4.3 Query views
 
 - **Never delete or modify an existing query view.** The reasoning is the same as for database views: it may be in use by content the migration does not own. Where the migration needs a query view that does not exist, author a new one.
 - **Query views must either be modeled on a topic** (using the `query` parameters) **or reference all database tables, dimensions, and measures as `${database_view__table}` and fields as `${foo_bar__qux.zip}`.** No direct-table or direct-field references. In a query view's `sql:` block this means `${view_name}` rather than a hard-coded `CATALOG.SCHEMA.TABLE` path. This preserves the path to dbt virtual schemas and keeps the definition correct if the table moves.
 
-### 4.4 Field and column references
+#### 4.4 Field and column references
 
 - **No direct column references in migration-authored code.** Reference a field on the same view as `${zip}`, and a field on another view as `${foo_bar__qux.zip}`. Never reference a database column directly.
 - **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions where needed for custom dimensions.
 
-### 4.5 Measures
+#### 4.5 Measures
 
 - **Do not re-create built-in aggregates.** Declare the aggregate and keep `sql` to the value being aggregated: `aggregate_type: sum` with `sql: ${zip}`, not `sql: SUM(${zip})`.
 - **Use a measure `filters:` block rather than `CASE WHEN` for filtered aggregates.** In filter blocks, use the bare field name for fields on the measure's own view and fully qualify fields from a joined view. Booleans use the same `{ is: … }` operator form as every other field, not a bare scalar.
 - **Determine the SQL dialect from the connection**, not from the connection's name, and use dialect-appropriate functions for any aggregate with no built-in equivalent.
 
-### 4.6 Changes to existing views
+#### 4.6 Changes to existing views
 
 - **Adding fields to existing views is permitted.** Tag migration-added fields with the same migration tag used for topics (§5) so they remain identifiable after the merge.
 - **Placement is determined by join dependency.** A field whose `sql` references another view belongs in the topic's `views:` block, because not every topic containing the host view carries the required join (§5). A field that depends only on its own view's columns belongs on the view.
 - **Existing fields must not be changed.** No label, `hidden`, format, or `sql` changes. These alter something already in use, and the effect reaches every topic and every dashboard referencing the field — content the migration does not own and cannot assess. Adding a description where none exists is covered by §4.7 and is not a change in this sense.
 
-### 4.7 Descriptions
+#### 4.7 Descriptions
 
 - **Port descriptions from the source model.** Where the incumbent tool carries descriptions on its model objects — Looker's `description` on views, dimensions, measures, and explores, for example — migrate them to the Omni equivalent. This metadata is costly to recreate and is silently lost if the migration ignores it. The rule covers topics as well as views and fields.
 - **Never overwrite a description that already exists.** Where the Omni object already carries one, leave it. It reflects a decision made in Omni that the migrating party cannot evaluate, and the source description is not necessarily the more current of the two.
 - This is distinct from the prohibition in §5 on using `description` for provenance. Porting a description written by the source model's author carries existing metadata forward; authoring one means the migrating party characterizing an object it does not understand.
 
-### 4.8 Naming
+#### 4.8 Naming
 
 - **Treat names as permanent.** Content breaks on rename. Labels are cosmetic; names are not. Check net-new names for collisions, including collisions that appear only after view-name scoping.
 
-## 5. Topics
+### 5. Topics
 
 - **Net-new topics must be identifiable as migration output.** This allows migration-driven work to be separated from pre-existing work after the merge. Carry provenance as metadata — a tag, plus topic-level `owners:` naming an accountable person. Do not use `description` or `ai_context` for this; the migrating party cannot characterize a topic's intended use, and an inaccurate characterization is worse than none.
 - **Notes on how the migrated content uses a topic belong in the topic as comments.** These record what the migration did, which the migrating party does know.
@@ -194,21 +538,21 @@ Findings the migration must produce before topics are authored or content is bui
 
 - **Before adding a topic-scoped field to an existing view, confirm the field does not already exist.** A field of the same name with different SQL is an override: queries through that topic use the topic-scoped definition while every other topic keeps the shared one. Overrides require explicit approval.
 
-## 6. dbt
+### 6. dbt
 
 - **If dbt is integrated, everything must be built off virtual schemas.**
 - **Virtual schemas must be in place before the migration begins.** Where the customer intends to use them, standing them up is a precondition (§2) rather than migration work. Authoring against physical schemas and converting afterwards means reworking every view, query view, and topic the migration produced.
 
 ---
 
-## 7. Content
+### 7. Content
 
 - **All queries must be based on topics**, including single-view topics.
 - **Dashboard filters must bind to modeled fields**, with default values and control types matching the source.
 - **Window-shaped result columns are table calculations, not model fields.** Running totals, moving averages, period-over-period and month-over-month percentages, percent-of-total, and rank are computed per query. Modeling them as fields is incorrect.
 - **Migrated content must be placed deliberately.** Folder, owner, and permissions are assigned as part of the migration (§9).
 
-## 8. Workbook model and ad hoc content
+### 8. Workbook model and ad hoc content
 
 Anything placed in the workbook model must be negotiated by exception. Nothing goes there by default.
 
@@ -225,11 +569,11 @@ Forbidden absent an approved exception:
 
 **Exceptions require a named approver**, the reason recorded in the migration manifest (§12), and a tracked follow-up to model it properly.
 
-## 9. Access and row-level controls
+### 9. Access and row-level controls
 
 Row-level security in Omni is topic-only. A net-new topic has nothing to inherit: it starts as an unfiltered surface, and the migration must reconstruct the gating.
 
-### 9.1 Routing
+#### 9.1 Routing
 
 Each discovered gate routes to one of:
 
@@ -238,7 +582,7 @@ Each discovered gate routes to one of:
 
 Record the routing decision per source object in the manifest (§12), with the source expression alongside the Omni expression.
 
-### 9.2 Required validations
+#### 9.2 Required validations
 
 **1. The attribute is the correct one.** The chosen Omni user attribute must be the semantic counterpart of the source gate. This is an intent question and requires the source content owner to confirm it.
 
@@ -267,15 +611,15 @@ Cover at least one user per distinct attribute value plus one user with no value
 
 Automated checks that omit `userId` do not exercise this. Running under the API key's own identity returned zero rows and a `COMPLETE` status where a real user with the same missing attribute got a hard failure. Access-filter tests must name a real `userId`.
 
-### 9.3 Other access requirements
+#### 9.3 Other access requirements
 
 - **Migrated content must not broaden access.** Where source and target access models do not map cleanly, escalate (§13).
 - **Content permissions are assigned, not inherited.** Migration carries no access. Folder placement, ownership, and permits are deliverables.
 - **Tooling must not modify connection permissions.** Schema scope changes are a §2 precondition.
 
-# Part III — Development hygiene
+## Part III — Development hygiene
 
-## 10. Branch and model state
+### 10. Branch and model state
 
 - **The branch is the isolation boundary.** Work on a branch is not visible to production AI chat, the topic picker, or any user who has not opened that branch. Review happens before merge, so no additional quarantine mechanism is required — merging is the act that exposes the work.
 
@@ -297,7 +641,7 @@ Automated checks that omit `userId` do not exercise this. Running under the API 
 
 - **Choose the target model up front.** If a hub-and-spoke arrangement exists, choose the spoke. A dedicated migration model extending the shared model is a third option; see the appendix. It has an unresolved exit path and should be evaluated separately rather than adopted by default.
 
-## 11. Model write mechanics
+### 11. Model write mechanics
 
 These are properties of the YAML write API that silently produce wrong results when a tool assumes otherwise.
 
@@ -314,7 +658,7 @@ These are properties of the YAML write API that silently produce wrong results w
 
 ---
 
-## 12. Manifest, idempotency, and rollback
+### 12. Manifest, idempotency, and rollback
 
 - **A committed machine-readable manifest** mapping source object to target object, per tile, topic, view, and field.
 - **Re-running the migration must not duplicate anything.** Object names must be deterministic functions of the source object rather than generated per run.
@@ -322,7 +666,7 @@ These are properties of the YAML write API that silently produce wrong results w
 - **An assumptions log** recording every judgment call the tooling made.
 - **A rollback plan** describing how to un-merge once content depends on the new topics.
 
-## 13. Unsupported constructs
+### 13. Unsupported constructs
 
 Define the behavior for constructs the tooling cannot reproduce faithfully: unsupported visualization types, calculations with no Omni equivalent, source features with no analog, and access models that do not map.
 
@@ -330,11 +674,11 @@ Unsupported constructs must halt and be logged for human escalation. The tooling
 
 ---
 
-# Part IV — Validation and acceptance
+## Part IV — Validation and acceptance
 
-## 14. Validation gates
+### 14. Validation gates
 
-### 14.1 Severity
+#### 14.1 Severity
 
 Model validation returns a JSON array of issue objects carrying `is_warning`, `message`, and `yaml_path`. `is_warning: false` is an error.
 
@@ -342,7 +686,7 @@ Model validation returns a JSON array of issue objects carrying `is_warning`, `m
 
 Warnings are fixed, not waived. The most common class, `No join path from …`, is produced by authoring a cross-view field in a view file rather than in the topic's `views:` block (§5). Correct placement eliminates it.
 
-### 14.2 Gate on `yaml_path`
+#### 14.2 Gate on `yaml_path`
 
 No pre-branch snapshot is needed. Both validators accept an optional branch, and main can be queried at any time:
 
@@ -357,7 +701,7 @@ The two commands use different flag spellings (`--branchid` and `--branch-id`). 
 
 Filter issues by `yaml_path` against the files the migration owns (§10) rather than diffing branch against main. This is unaffected by base changes during the branch's life, and it prevents new breakage being attributed to pre-existing noise.
 
-### 14.3 Query-level checks
+#### 14.3 Query-level checks
 
 For every migrated query, confirm in the response that `summary.missing_fields` is `[]` and that `summary.invalid_calculations` is empty. Note that `invalid_calculations` returns as `{}` rather than `[]`.
 
@@ -371,7 +715,7 @@ omni models get-topic <modelId> <topicName> --branch-id <branchId>
 
 The response must contain every field the migrated content references. This is weaker than running the queries, since it tests a field list rather than execution.
 
-### 14.4 Content validator
+#### 14.4 Content validator
 
 The content validator reports broken references in saved content. It does not evaluate whether results are correct.
 
@@ -388,15 +732,15 @@ Mechanics:
 - Drafts are returned alongside published documents with `type: "draft"`. Migration output held in drafts is therefore in scope. Only documents cleared to zero query presentations are omitted.
 - Consume the API response rather than the user interface. The validator's search filters on field, view, and topic references parsed from query definitions and does not read issue text. Breakage originating in the model, such as a broken `always_where` on a topic, attaches an error to every tile while the document contains no matching reference, so those rows cannot be reached through the interface filter. The errors are present in the API response.
 
-### 14.5 Sequencing
+#### 14.5 Sequencing
 
 Verify written YAML with a read-back (§11) before interpreting any validator output. Validator results against a branch whose contents differ from expectation are not meaningful.
 
-### 14.6 No enforcement at merge
+#### 14.6 No enforcement at merge
 
 Omni provides no dry-run and no server-side gate. A branch carrying blocking validation errors can be merged. Every gate in this section is procedural and depends on the review process.
 
-## 15. Parity
+### 15. Parity
 
 Structural rules do not establish that the numbers are correct. Parity is a separate gate. The access-filter validations in §9.2 are acceptance criteria alongside these.
 
@@ -409,7 +753,7 @@ Structural rules do not establish that the numbers are correct. Parity is a sepa
 
 ---
 
-## Appendix — A dedicated migration model
+### Appendix — A dedicated migration model
 
 An alternative to writing migration output into the shared model: give the migration its own model that extends the shared model, and place everything it creates there.
 
